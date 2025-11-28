@@ -1,0 +1,195 @@
+name: Build and Deploy to AWS
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+env:
+  DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+  IMAGE_NAME: cinematch
+  AWS_REGION: eu-west-2
+
+jobs:
+  build-and-push:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+      
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.prod
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:buildcache
+          cache-to: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
+      
+      - name: Image digest
+        run: echo ${{ steps.meta.outputs.digest }}
+
+  deploy:
+    name: Deploy to AWS EC2
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Get EC2 connection details from SSM
+        id: ssm
+        run: |
+          # Fetch EC2 host (public IP or DNS) - You need to add this to SSM after creating EC2
+          # EC2_HOST=$(aws ssm get-parameter --name "/cinematch/production/ec2-host" --query 'Parameter.Value' --output text)
+          # echo "ec2_host=$EC2_HOST" >> $GITHUB_OUTPUT
+          
+          # For now, use the Elastic IP output from terraform or set it manually in SSM
+          # You can get this from: terraform output -raw ec2_public_ip
+          echo "Note: Make sure to create SSM parameter /cinematch/production/ec2-host with your EC2 Elastic IP"
+          
+          # Alternatively, get it from EC2 instance tag
+          EC2_HOST=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=cinematch-app-server" "Name=instance-state-name,Values=running" \
+            --query 'Reservations[0].Instances[0].PublicIpAddress' \
+            --output text)
+          
+          echo "ec2_host=$EC2_HOST" >> $GITHUB_OUTPUT
+      
+      - name: Get SSH key from SSM
+        id: ssh-key
+        run: |
+          # Fetch SSH private key from SSM Parameter Store (SecureString)
+          aws ssm get-parameter \
+            --name "/cinematch/production/ec2-ssh-key" \
+            --with-decryption \
+            --query 'Parameter.Value' \
+            --output text > private_key.pem
+          
+          chmod 600 private_key.pem
+      
+      - name: Deploy to EC2 via SSM Session Manager (preferred) or SSH
+        env:
+          EC2_HOST: ${{ steps.ssm.outputs.ec2_host }}
+          EC2_USER: ubuntu
+        run: |
+          # Option 1: Use SSM Session Manager (no SSH key needed, more secure)
+          # Get instance ID
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=cinematch-app-server" "Name=instance-state-name,Values=running" \
+            --query 'Reservations[0].Instances[0].InstanceId' \
+            --output text)
+          
+          echo "Deploying to instance: $INSTANCE_ID"
+          
+          # Execute deployment via SSM Session Manager
+          aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --parameters 'commands=[
+              "cd /opt/cinematch",
+              "sudo /root/update-app.sh"
+            ]' \
+            --output text \
+            --query 'Command.CommandId' > command_id.txt
+          
+          COMMAND_ID=$(cat command_id.txt)
+          echo "Command ID: $COMMAND_ID"
+          
+          # Wait for command completion (max 2 minutes)
+          for i in {1..24}; do
+            STATUS=$(aws ssm list-command-invocations \
+              --command-id "$COMMAND_ID" \
+              --details \
+              --query 'CommandInvocations[0].Status' \
+              --output text)
+            
+            echo "Status: $STATUS"
+            
+            if [ "$STATUS" = "Success" ]; then
+              echo "✅ Deployment successful!"
+              aws ssm list-command-invocations \
+                --command-id "$COMMAND_ID" \
+                --details \
+                --query 'CommandInvocations[0].CommandPlugins[0].Output' \
+                --output text
+              break
+            elif [ "$STATUS" = "Failed" ]; then
+              echo "❌ Deployment failed!"
+              aws ssm list-command-invocations \
+                --command-id "$COMMAND_ID" \
+                --details \
+                --query 'CommandInvocations[0].CommandPlugins[0].Output' \
+                --output text
+              exit 1
+            fi
+            
+            sleep 5
+          done
+          
+          # Optional: Fallback to SSH if SSM fails
+          # Uncomment below if you want SSH fallback
+          # if [ "$STATUS" != "Success" ]; then
+          #   echo "SSM failed, falling back to SSH..."
+          #   ssh -o StrictHostKeyChecking=no -i private_key.pem ${EC2_USER}@${EC2_HOST} "cd /opt/cinematch && sudo /root/update-app.sh"
+          # fi
+      
+      - name: Cleanup
+        if: always()
+        run: |
+          rm -f private_key.pem command_id.txt
+      
+      - name: Deployment status
+        run: echo "Deployment completed successfully"
+
+  notify:
+    name: Notify deployment status
+    needs: [build-and-push, deploy]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+      - name: Send notification
+        run: |
+          if [ "${{ needs.deploy.result }}" == "success" ]; then
+            echo "✅ Deployment successful!"
+          else
+            echo "❌ Deployment failed!"
+          fi
+
