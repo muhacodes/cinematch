@@ -43,8 +43,11 @@ SECRET_KEY = env('SECRET_KEY', default='django-insecure-i52rx(knzkw&!g%_k1())a6o
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = env('DEBUG', default=True)
 
-ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=['*'])
-
+ALLOWED_HOSTS = [
+    "api.cinematch.muhacodes.com",
+    "localhost",
+    "127.0.0.1",
+]
 
 # CORS Configuration
 CORS_ALLOW_ALL_ORIGINS = DEBUG  # Only allow all origins in debug mode

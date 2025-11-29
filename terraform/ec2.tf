@@ -399,6 +399,18 @@ resource "aws_instance" "app" {
 
   user_data = local.user_data
 
+  depends_on = [
+  aws_ssm_parameter.db_host,
+  aws_ssm_parameter.db_name,
+  aws_ssm_parameter.db_username,
+  aws_ssm_parameter.db_password,
+  aws_ssm_parameter.django_secret_key,
+  aws_ssm_parameter.tmdb_token,
+  aws_ssm_parameter.llm_api_key,
+  aws_ssm_parameter.dockerhub_image,
+  aws_ssm_parameter.domain_name,
+]
+
   root_block_device {
     volume_type           = "gp3"
     volume_size           = 20
