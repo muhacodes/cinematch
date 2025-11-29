@@ -6,6 +6,9 @@ from .services import TMDBService, LLMService
 from .utils import fetch_movie_details_with_keywords, get_genre_id_mapping
 
 
+def health(request):
+    return JsonResponse({"status": "ok"})
+    
 class TrendingView(APIView):
     """Get trending movies"""
     def get(self, request):
