@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # CineMatch - AI-Powered Movie Recommendation API
 
 CineMatch is a Django REST API that provides personalized movie recommendations using TMDB data and LLM-powered analysis of user preferences.
@@ -352,3 +353,6 @@ For issues and questions:
 - [OpenAI](https://openai.com/) for LLM capabilities
 - AWS for infrastructure
 
+=======
+# cinematch
+>>>>>>> 969689f9a69dd89a892c0bc3cce4bbeb9ed93c26
