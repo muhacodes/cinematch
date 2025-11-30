@@ -86,7 +86,7 @@ jobs:
           
           # Alternatively, get it from EC2 instance tag
           EC2_HOST=$(aws ec2 describe-instances \
-            --filters "Name=tag:Name,Values=cinematch-app-server" "Name=instance-state-name,Values=running" \
+            --filters "Name=tag:Name,Values=cinematch-server" "Name=instance-state-name,Values=running" \
             --query 'Reservations[0].Instances[0].PublicIpAddress' \
             --output text)
           
@@ -112,7 +112,7 @@ jobs:
           # Option 1: Use SSM Session Manager (no SSH key needed, more secure)
           # Get instance ID
           INSTANCE_ID=$(aws ec2 describe-instances \
-            --filters "Name=tag:Name,Values=cinematch-app-server" "Name=instance-state-name,Values=running" \
+            --filters "Name=tag:Name,Values=cinematch-server" "Name=instance-state-name,Values=running" \
             --query 'Reservations[0].Instances[0].InstanceId' \
             --output text)
           
